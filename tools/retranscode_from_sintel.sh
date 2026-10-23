@@ -23,9 +23,9 @@ ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "$S360" -an -c:v libx2
 ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "$S360" -an -c:v libx265 -pix_fmt yuv420p -b:v 3M -maxrate 3M -bufsize 6M tools/samples/test_hevc_main_cbr.mp4
 
 echo "== MPEG-2 =="
-ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "scale=720:576" -an -c:v mpeg2video -pix_fmt yuv420p -b:v 6M -minrate 6M -maxrate 6M -bufsize 12M tools/samples/test_mpeg2_main_420_cbr.mpg
-ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "scale=720:576" -an -c:v mpeg2video -pix_fmt yuv422p -b:v 8M -maxrate 12M -bufsize 16M tools/samples/test_mpeg2_422_vbr.mpg
-ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "scale=720:576,setfield=tff" -an -c:v mpeg2video -pix_fmt yuv420p -flags +ildct+ilme -b:v 6M -maxrate 9M -bufsize 12M tools/samples/test_mpeg2_main_interlaced.mpg
+ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "scale=720:576" -an -c:v mpeg2video -pix_fmt yuv420p -b:v 6M -minrate 6M -maxrate 6M -bufsize 12M -g 12 -bf 2 tools/samples/test_mpeg2_main_420_cbr.mpg
+ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "scale=720:576" -an -c:v mpeg2video -pix_fmt yuv422p -b:v 8M -maxrate 12M -bufsize 16M -g 12 -bf 2 tools/samples/test_mpeg2_422_vbr.mpg
+ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "scale=720:576,setfield=tff" -an -c:v mpeg2video -pix_fmt yuv420p -flags +ildct+ilme -b:v 6M -maxrate 9M -bufsize 12M -g 12 -bf 2 tools/samples/test_mpeg2_main_interlaced.mpg
 
 echo "== AV1 =="
 ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "$S360" -an -c:v libsvtav1 -preset 8 -pix_fmt yuv420p -crf 32 -g 30 tools/samples/test_av1_main8_crf.mp4
