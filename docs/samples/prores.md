@@ -174,3 +174,9 @@ bit_rate=26171037
 
 tag 对应关系:Proxy=`apco` / LT=`apcs` / Standard=`apcn` /
 HQ=`apch` / 4444=`ap4h` / XQ=`ap4x`,与 Apple 四字符码规范一致。
+
+## 真实内容重转
+
+本目录下 testsrc2 合成的本地变体已用 Sintel 预告片（`tools/samples/test_avc_sintel_trailer.mp4`
+第 5~10 秒，真 3D 运镜）重转：`tools/retranscode_from_sintel.sh`，profile×chroma×RC 设置不变，
+只换像素源。ffprobe 实测 profile/pix_fmt 与命名一致，分析 I/P/B 正常。
