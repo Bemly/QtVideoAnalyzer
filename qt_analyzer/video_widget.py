@@ -353,6 +353,72 @@ class VideoWidget(QWidget):
                                max(1, int(sz * sx)), max(1, int(sz * sy)))
                 p.setPen(QColor(0xE4, 0xE7, 0xEA))
                 p.drawText(int(dx) + 6, int(dy) + 14, f"Codec层:AV1 SB {len(data)}块")
+            elif kind in ("vvc", "avs3"):
+                # [(x0,y0,bw,bh,depth)] (vvc mtt / avs3 lcu)
+                cols = (QColor(59, 130, 246, 110), QColor(34, 197, 94, 110),
+                        QColor(245, 158, 11, 120), QColor(239, 68, 68, 130),
+                        QColor(168, 85, 247, 130))
+                try:
+                    from .codec_next import depth_color as _dc2  # type: ignore
+                except Exception:
+                    _dc2 = None
+                for e in data[:3000]:
+                    try:
+                        if len(e) >= 5:
+                            x0, y0, bw, bh, dp = float(e[0]), float(e[1]), float(e[2]), float(e[3]), int(e[4])
+                        else:
+                            x0, y0, bw, bh, dp = float(e[0]), float(e[1]), float(e[2]), float(e[2]), int(e[3])
+                    except Exception:
+                        continue
+                    if _dc2 is not None and kind == "vvc":
+                        try:
+                            col = _dc2(dp)
+                        except Exception:
+                            col = cols[max(0, min(4, dp))]
+                    else:
+                        col = cols[max(0, min(4, dp))]
+                    p.setPen(QPen(col, 1))
+                    p.drawRect(int(dx + x0 * sx), int(dy + y0 * sy),
+                               max(1, int(bw * sx)), max(1, int(bh * sy)))
+                p.setPen(QColor(0xE4, 0xE7, 0xEA))
+                tag = "VVC MTT" if kind == "vvc" else "AVS3 LCU"
+                p.drawText(int(dx) + 6, int(dy) + 14, f"Codec层:{tag} {len(data)}块")
+            elif kind == "prores":
+                # [(x0,y0,x1,y1,kind,index)]: slice 横条 + dct 网格
+                for e in data[:3000]:
+                    try:
+                        x0, y0, x1, y1 = float(e[0]), float(e[1]), float(e[2]), float(e[3])
+                        kk = str(e[4]) if len(e) > 4 else "dct"
+                    except Exception:
+                        continue
+                    if kk == "slice":
+                        col = QColor(0xE8, 0xC0, 0x50, 200)
+                        wid = 2.0
+                    else:
+                        col = QColor(0x5B, 0x9B, 0xFF, 80)
+                        wid = 1.0
+                    p.setPen(QPen(col, wid))
+                    if kk == "slice":
+                        p.drawLine(int(dx + x0 * sx), int(dy + y0 * sy),
+                                   int(dx + x1 * sx), int(dy + y0 * sy))
+                        p.drawLine(int(dx + x0 * sx), int(dy + y1 * sy),
+                                   int(dx + x1 * sx), int(dy + y1 * sy))
+                    else:
+                        p.drawRect(int(dx + x0 * sx), int(dy + y0 * sy),
+                                   max(1, int((x1 - x0) * sx)), max(1, int((y1 - y0) * sy)))
+                p.setPen(QColor(0xE4, 0xE7, 0xEA))
+                p.drawText(int(dx) + 6, int(dy) + 14, f"Codec层:ProRes slice {len(data)}项")
+            elif kind == "theora":
+                # [(x,y,size)] 8x8 DCT 点阵
+                p.setPen(QPen(QColor(0x35, 0xFF, 0x7A, 160), 1))
+                for e in data[:6000]:
+                    try:
+                        x, y = float(e[0]), float(e[1])
+                    except Exception:
+                        continue
+                    p.drawPoint(int(dx + x * sx), int(dy + y * sy))
+                p.setPen(QColor(0xE4, 0xE7, 0xEA))
+                p.drawText(int(dx) + 6, int(dy) + 14, f"Codec层:Theora DCT {len(data)}点")
             elif kind == "altref":
                 # [(index,kind)] 或 heuristic
                 try:

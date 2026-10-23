@@ -387,13 +387,26 @@ class MainWindow(QMainWindow):
         tr.addWidget(self.ck_noise)
         tr.addWidget(QLabel("Codec层", left))
         self.cmb_codec_layer = QComboBox(left)
-        self.cmb_codec_layer.addItems(["关", "AVC分区", "H.263 GOB", "CTU四叉树", "VP分段", "AV1 SB", "AltRef星"])
+        self.cmb_codec_layer.addItems(["关", "AVC分区", "H.263 GOB", "CTU四叉树", "VP分段",
+                                       "AV1 SB", "AltRef星", "VVC MTT", "AVS3 LCU",
+                                       "ProRes slice", "Theora点阵"])
         self.cmb_codec_layer.setToolTip("Codec 层叠加（家族模块就绪即插即用，缺失降级）")
         try:
-            self.cmb_codec_layer.currentTextChanged.connect(self._on_codec_layer)
+            self.cmb_codec_layer.currentTextChanged.connect(self._on_codec_layer_manual)
         except Exception:
             pass
         tr.addWidget(self.cmb_codec_layer)
+        from PySide6.QtWidgets import QCheckBox as _QCB
+        self.ck_layer_auto = _QCB("跟随格式", left)
+        self.ck_layer_auto.setChecked(True)
+        self.ck_layer_auto.setToolTip("打开文件时按视频格式自动选 Codec 层；手动切层后自动关闭")
+        try:
+            self.ck_layer_auto.toggled.connect(lambda on: setattr(self, "_codec_layer_auto", bool(on)))
+        except Exception:
+            pass
+        tr.addWidget(self.ck_layer_auto)
+        self._codec_layer_auto = True
+        self._codec_layer_index = -1
         lv.addLayout(tr)
 
         # timeline 简化 QSlider
@@ -653,6 +666,16 @@ class MainWindow(QMainWindow):
         self.graphs.set_result(result)
         self.graphs.set_view(self._view_start, self._view_end)
         self.graphs.set_playhead(self._position)
+        if first:
+            # 新文件：恢复跟随格式，下面的自动选层按新格式来
+            try:
+                self._codec_layer_auto = True
+                if getattr(self, "ck_layer_auto", None) is not None:
+                    self.ck_layer_auto.setChecked(True)
+            except Exception:
+                pass
+            self._codec_layer_index = -1
+            self._auto_codec_layer()
         self._refresh_panels()
         self._show_frame_at(self._position)
         if first:
@@ -693,6 +716,58 @@ class MainWindow(QMainWindow):
                 self.codec_panel.set_result(r)
         except Exception:
             pass
+
+    def _on_codec_layer_manual(self, text: str) -> None:
+        """用户手动切层：关闭跟随格式，再走正常叠加。"""
+        if getattr(self, "_codec_layer_setting", False):
+            return self._on_codec_layer(text)
+        try:
+            self._codec_layer_auto = False
+            if getattr(self, "ck_layer_auto", None) is not None:
+                self.ck_layer_auto.setChecked(False)
+        except Exception:
+            pass
+        return self._on_codec_layer(text)
+
+    def _codec_layer_for_codec(self, codec_raw: str) -> str:
+        """格式 -> 自动层。永不抛错，未知回 AVC分区（MB 网格通用）。"""
+        try:
+            from .codec_insight import codec_key as _ck
+            k = _ck(codec_raw)
+        except Exception:
+            k = str(codec_raw or "").lower()
+        return {"avc": "AVC分区", "mpeg2": "AVC分区", "mpeg4": "AVC分区",
+                "h263": "H.263 GOB", "hevc": "CTU四叉树",
+                "vp6": "VP分段", "vp8": "VP分段", "vp9": "VP分段",
+                "av1": "AV1 SB", "theora": "Theora点阵",
+                "prores": "ProRes slice", "vvc": "VVC MTT",
+                "av2": "AV1 SB", "avs3": "AVS3 LCU"}.get(k, "AVC分区")
+
+    def _auto_codec_layer(self) -> None:
+        """新文件就绪且跟随格式开时，按媒体编码自动选层。"""
+        if not getattr(self, "_codec_layer_auto", True):
+            return
+        r = getattr(self, "_result", None)
+        if r is None:
+            return
+        try:
+            codec_raw = str(getattr(r.media, "video_codec", "unknown") or "unknown")
+        except Exception:
+            return
+        target = self._codec_layer_for_codec(codec_raw)
+        try:
+            if str(self.cmb_codec_layer.currentText()) == target:
+                self._on_codec_layer(target)
+                return
+            self._codec_layer_setting = True
+            self.cmb_codec_layer.setCurrentText(target)
+        except Exception:
+            pass
+        finally:
+            try:
+                self._codec_layer_setting = False
+            except Exception:
+                pass
 
     def _on_codec_layer(self, text: str) -> None:
         """Codec 层切换：调对应家族 overlay 并喂给 video_widget；缺失则降级+状态栏提示。"""
@@ -820,6 +895,26 @@ class MainWindow(QMainWindow):
                         ov = []
                 _feed("altref", ov)
                 handled = True
+            elif t == "VVC MTT":
+                from . import codec_next as _m  # type: ignore
+                ov = _m.mtt_overlay(int(w), int(h), cur)
+                _feed("vvc", ov)
+                handled = True
+            elif t == "AVS3 LCU":
+                from . import codec_avs3 as _m  # type: ignore
+                ov = _m.lcu_overlay(int(w), int(h), cur)
+                _feed("avs3", ov)
+                handled = True
+            elif t == "ProRes slice":
+                from . import codec_prores as _m  # type: ignore
+                ov = _m.slice_overlay(int(w), int(h))
+                _feed("prores", ov)
+                handled = True
+            elif t == "Theora点阵":
+                from . import codec_theora_av1 as _m  # type: ignore
+                ov = _m.superblock_overlay(int(w), int(h), cur, "theora")
+                _feed("theora", ov)
+                handled = True
             else:
                 raise ImportError(f"unknown layer {t}")
         except Exception as e:
@@ -837,7 +932,8 @@ class MainWindow(QMainWindow):
                     pass
             else:
                 try:
-                    if t in ("AVC分区", "CTU四叉树", "VP分段", "AV1 SB", "H.263 GOB"):
+                    if t in ("AVC分区", "CTU四叉树", "VP分段", "AV1 SB", "H.263 GOB",
+                               "VVC MTT", "AVS3 LCU", "ProRes slice", "Theora点阵"):
                         self.video.show_grid = True
                         try:
                             self.ck_grid.setChecked(True)
@@ -929,6 +1025,16 @@ class MainWindow(QMainWindow):
             self.video.set_frame_info(f)
             if f.motion is not None:
                 self.video.set_field(f.motion)
+        except Exception:
+            pass
+        # 跟随格式开时，帧相关层随当前帧重算（按帧号缓存，同帧不重复算）
+        try:
+            if getattr(self, "_codec_layer_auto", False):
+                t = str(self.cmb_codec_layer.currentText())
+                if t in ("AVC分区", "CTU四叉树", "VP分段", "AV1 SB", "VVC MTT", "AVS3 LCU"):
+                    if int(getattr(self, "_codec_layer_index", -1)) != int(f.index):
+                        self._codec_layer_index = int(f.index)
+                        self._on_codec_layer(t)
         except Exception:
             pass
 
