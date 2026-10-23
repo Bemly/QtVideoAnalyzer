@@ -1,10 +1,11 @@
 """AVS3 (GB/T 33475.2, second-gen Chinese broadcast codec) algorithm highlights.
 
-No local ffmpeg encoder/decoder on this machine (brew ffmpeg 9.0.2 ships only
-AVS1/cavs), so this module is header-truth + deterministic simulated overlays,
-same pattern as codec_next.py: describe() always works, overlays are stable
-per frame, and full-chain selftests run on an hevc surrogate (both use
-ffprobe frame-header parsing, so the type/GOP path is identical).
+Local decode is real: uavs3dec (uavs3d, libuavs3d 1.2.1_release, 8-bit build,
+macOS arm64, cmake-built into tools/avs3bin/) decodes AVS3-P2 baseline streams
+bit-exactly. describe() always works; overlays are stable per frame; the
+full-chain selftest runs on a genuine AVS3 stream
+(tools/samples/test_avs3_city.avs3, uavs3/avs3stream City_1280x720_60_ra),
+NOT an hevc surrogate.
 
 Deps: numpy (optional, pure-python fallback) + stdlib. PySide6 only inside
 the paint helper.
@@ -32,7 +33,12 @@ def describe(codec: str = "avs3", summary=None) -> dict:
         "codec": "avs3",
         "family": "AVS3",
         "full_name": "AVS3-P2 (GB/T 33475.2, HPM reference)",
-        "status": "no-local-codec: describe+overlay work, samples need external encoder",
+        "status": "local-decode: uavs3dec (libuavs3d 1.2.1, 8-bit, arm64) "
+                    "解出 1280x720 真流，md5 与官方重建 YUV 逐字节一致",
+        "decoder": "uavs3d uavs3dec (libuavs3d(8) 1.2.1_release) @ tools/avs3bin/",
+        "decode_cmd": "uavs3dec -i in.avs3 -o out.yuv -l 2 -t 8 [-s 1]",
+        "verified_sample": "test_avs3_city.avs3 (City_1280x720_60_ra, 600f, "
+                           "I=10/P=0/B=590, GOP64 RA)",
         "block": "LCU 128x128",
         "partition": "QT + BTT (binary/ternary) multi-type tree, CU/PU/TU unified",
         "entropy": "binary arithmetic coding (CABAC-class)",
@@ -134,5 +140,10 @@ def reference_arcs(frames, limit: int = 24) -> list:
 
 
 def decode_capability_note() -> str:
-    return ("本机 ffmpeg 9.0.2：avs/av1 仅 AVS1(cavs) 解码，无 AVS3 编解码；"
-            "ffprobe 帧头解析路径与 hevc 一致，type/GOP 可用代跑验证。")
+    return ("真解码器 uavs3dec @ tools/avs3bin/（uavs3d, libuavs3d(8) "
+            "1.2.1_release, macOS arm64 cmake 构建，AVS3-P2 baseline）;"
+            " `uavs3dec -i in.avs3 -o out.yuv -l 2 -t 8` 解出 1280x720/600 帧，"
+            "md5=df6fff020f1e3e906237ee278c7db069 与官方重建 YUV 一致。"
+            "本机 ffmpeg 9.0.2 仅能解析 avs3（codec_name=avs3, has_b_frames=1）"
+            "而无解码器：-debug qp/mv 与 -show_frames 均为空，QP/运动走估算分支"
+            "（运动测的是真解码像素经无损转封装后的 Farneback 流场）。")
