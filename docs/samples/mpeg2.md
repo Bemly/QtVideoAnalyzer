@@ -132,3 +132,9 @@ test_mpeg2_422_vbr.mpg:       100 frame,0,0  (全逐行)； 9 I / 25 P / 66 B
 test_mpeg2_main_interlaced.mpg: 100 frame,1,1 (全交错+tff)； 9 I / 25 P / 66 B
 test_mpeg2_dvd_vts06.vob:       89 frame,I,1,1 (全 I 交错+tff)
 ```
+
+## 真实内容重转
+
+本目录下 testsrc2 合成的本地变体已用 Sintel 预告片（`tools/samples/test_avc_sintel_trailer.mp4`
+第 5~10 秒，真 3D 运镜）重转：`tools/retranscode_from_sintel.sh`，profile×chroma×RC 设置不变，
+只换像素源。ffprobe 实测 profile/pix_fmt 与命名一致，分析 I/P/B 正常。
