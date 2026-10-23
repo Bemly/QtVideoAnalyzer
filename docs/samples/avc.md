@@ -101,3 +101,9 @@ test_avc_sintel_trailer.mp4: has_b_frames=2, pkt n=1253 mean=2801B cv=1.28
 - RC 痕迹口径：`bit_rate` 取 video stream 项；CV = 视频包大小总体标准差/均值
  （`ffprobe -show_entries packet=size`）；5s 合成片内容单一，CBR/CRF 的 CV 差异不如真实片明显，
   故 CBR 以"码率≈目标 + maxrate/bufsize 限幅设定"为判据，CRF 以"内容驱动码率 + B 帧占比"为判据。
+
+## 真实内容重转
+
+本目录下 testsrc2 合成的本地变体已用 Sintel 预告片（`tools/samples/test_avc_sintel_trailer.mp4`
+第 5~10 秒，真 3D 运镜）重转：`tools/retranscode_from_sintel.sh`，profile×chroma×RC 设置不变，
+只换像素源。ffprobe 实测 profile/pix_fmt 与命名一致，分析 I/P/B 正常。
