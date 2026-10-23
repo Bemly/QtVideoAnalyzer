@@ -93,6 +93,9 @@ class MediaInfo:
     pix_fmt: str = "unknown"
     fps: float = 25.0
     nb_frames: int = 0
+    # container time-base rate guess (tbr): for codecs whose probe lacks
+    # dimensions/fps (AVS3) this carries the sequence-header frame rate.
+    tbr: float = 0.0
     video_codec: str = "unknown"
     video_profile: str = "unknown"
     video_level: str = ""
@@ -167,6 +170,10 @@ class AnalysisResult:
     has_deep: bool = False
     qp_estimated: bool = False
     motion_estimated: bool = False
+    # False when packet timestamps were missing (raw .bit etc.) and pts was
+    # synthesized as i/fps: seeking must restart-from-0 + skip, and ffmpeg
+    # must not use -ss/-fps_mode passthrough on such streams.
+    timestamps_valid: bool = True
     max_bitrate: float = 0.0
     avg_bitrate: float = 0.0
     min_bitrate: float = 0.0

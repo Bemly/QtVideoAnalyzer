@@ -218,7 +218,7 @@ def run_analysis(
 
     frames = _scan_packets(media.file_path or file_path, media.fps, media.nb_frames,
                            progress=_scan_progress if on_stage is not None else None,
-                           cancel=cancel)
+                           cancel=cancel, mark_result=result)
     _throw_if_cancelled(cancel)
 
     if frames:

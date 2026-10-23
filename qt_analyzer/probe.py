@@ -140,6 +140,10 @@ def probe(file_path: str) -> MediaInfo:
         info.color_transfer = _str(video, "color_transfer", "unknown") or "unknown"
         info.field_order = _str(video, "field_order", "unknown") or "unknown"
         info.codec_tag = _str(video, "codec_tag_string", "")
+        try:
+            info.tbr = _ratio(video.get("r_frame_rate", "0/0"))
+        except Exception:
+            info.tbr = 0.0
         sar = str(video.get("sample_aspect_ratio", "1:1"))
         if "/" in sar:
             try:
@@ -169,4 +173,72 @@ def probe(file_path: str) -> MediaInfo:
         info.fps = 25.0
     if info.duration <= 0 and info.nb_frames > 0:
         info.duration = info.nb_frames / info.fps
+    _fix_avs3(info)
     return info
+
+
+def _uavs3dec_path() -> str | None:
+    """Locate the AVS3 reference decoder (tools/avs3bin, else PATH)."""
+    try:
+        import shutil
+        here = os.path.dirname(os.path.abspath(__file__))
+        for cand in (os.path.normpath(os.path.join(here, "..", "tools", "avs3bin", "uavs3dec")),
+                     os.path.join(os.path.dirname(here), "avs3bin", "uavs3dec")):
+            try:
+                if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                    return cand
+            except OSError:
+                continue
+        w = shutil.which("uavs3dec")
+        if w:
+            return w
+    except Exception:
+        pass
+    return None
+
+
+def _fix_avs3(info: MediaInfo) -> None:
+    """AVS3: ffprobe gives no dimensions; decode 2 frames with uavs3dec.
+
+    Fills width/height from the sequence header log and fps from tbr
+    (the AVS3 demuxer parses frame_rate_code into tbr). No decoder ->
+    fields stay 0 and playback reports it instead of failing silently.
+    """
+    try:
+        codec = str(info.video_codec or "").lower()
+    except Exception:
+        return
+    if codec not in ("avs3", "avs", "avs3-p2"):
+        return
+    try:
+        if 1.0 <= float(info.tbr or 0) <= 240.0:
+            info.fps = float(info.tbr)
+    except Exception:
+        pass
+    if (info.width or 0) > 0 and (info.height or 0) > 0:
+        return
+    exe = _uavs3dec_path()
+    if not exe:
+        return
+    import re as _re
+    import tempfile as _tf
+    tmp = None
+    try:
+        fd, tmp = _tf.mkstemp(suffix=".yuv")
+        os.close(fd)
+        p = subprocess.run([exe, "-i", info.file_path, "-o", tmp,
+                            "-f", "2", "-l", "2"],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True, errors="ignore", timeout=180)
+        out = p.stdout or ""
+        m = _re.search(r"Resolution\s*=\s*(\d+)\s*x\s*(\d+)", out)
+        if m:
+            info.width, info.height = int(m.group(1)), int(m.group(2))
+    except Exception:
+        pass
+    finally:
+        try:
+            if tmp and os.path.isfile(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass

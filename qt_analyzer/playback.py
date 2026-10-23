@@ -82,6 +82,7 @@ class PlaybackEngine(QObject):
         self._stop = threading.Event()
         self._eof = threading.Event()
         self._stderr_text = ""
+        self._skip = 0
         self.width = 0
         self.height = 0
         self.start_index = 0
@@ -108,7 +109,7 @@ class PlaybackEngine(QObject):
         return self._eof.is_set() and (ready is None or ready.empty())
 
     def start(self, file: str, width: int, height: int,
-              start_s: float, start_index: int) -> None:
+              start_s: float, start_index: int, seekable: bool = True) -> None:
         self.stop()
 
         # Decoders need even dimensions; round down like the C# version.
@@ -126,14 +127,32 @@ class PlaybackEngine(QObject):
         for _ in range(_POOL_SIZE):
             free.put(bytearray(stride))
 
-        args = [
-            exe, "-v", "error", "-hide_banner",
-            "-ss", f"{max(0.0, float(start_s)):.3f}",
-            "-i", str(file), "-an",
-            "-vf", f"scale={w}:{h}:flags=bilinear",
-            "-f", "rawvideo", "-pix_fmt", "rgb24",
-            "-fps_mode", "passthrough", "pipe:1",
-        ]
+        if seekable:
+            # Normal path: input seek + passthrough timestamps.
+            args = [
+                exe, "-v", "error", "-hide_banner",
+                "-ss", f"{max(0.0, float(start_s)):.3f}",
+                "-i", str(file), "-an",
+                "-vf", f"scale={w}:{h}:flags=bilinear",
+                "-f", "rawvideo", "-pix_fmt", "rgb24",
+                "-fps_mode", "passthrough", "pipe:1",
+            ]
+            skip = 0
+        else:
+            # Timestamp-less raw streams (.bit etc.): -ss breaks demuxing and
+            # passthrough drops every frame (no pts). Decode from 0 and skip
+            # to start_index in the reader instead.
+            args = [
+                exe, "-v", "error", "-hide_banner",
+                "-i", str(file), "-an",
+                "-vf", f"scale={w}:{h}:flags=bilinear",
+                "-f", "rawvideo", "-pix_fmt", "rgb24",
+                "pipe:1",
+            ]
+            try:
+                skip = max(0, int(start_index))
+            except Exception:
+                skip = 0
         try:
             proc = subprocess.Popen(
                 args, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -146,6 +165,7 @@ class PlaybackEngine(QObject):
             self.width = w
             self.height = h
             self.start_index = max(0, int(start_index))
+            self._skip = skip
             self._eof.clear()
             self._stderr_text = ""
             self._proc = proc
@@ -179,6 +199,18 @@ class PlaybackEngine(QObject):
         stride = self.width * self.height * 3
         delivered = 0
         try:
+            # Timestamp-less mode: drop the first _skip frames (input -ss
+            # cannot address them), then serve sequentially from there.
+            try:
+                skip = max(0, int(getattr(self, "_skip", 0) or 0))
+            except Exception:
+                skip = 0
+            self._skip = 0
+            drop = bytearray(stride)
+            while skip > 0 and not self._stop.is_set():
+                if _read_exact(stream, drop, stride) < stride:
+                    break
+                skip -= 1
             while not self._stop.is_set():
                 try:
                     buf = free.get(timeout=0.2)

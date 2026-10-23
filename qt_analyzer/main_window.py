@@ -286,6 +286,119 @@ class FilmstripWorker(QThread):
         self.ready.emit(None)
 
 
+class ProxyWorker(QThread):
+    """AVS3 -> H.264 proxy transcode in background (uavs3dec + libx264).
+
+    ffmpeg has no AVS3 decoder, so the picture path (playback/filmstrip)
+    plays a cached proxy while analysis uses the original stream.
+    Emits ready(proxy_path) / failed(msg) / status(text).
+    """
+
+    ready = Signal(str)
+    failed = Signal(str)
+    status = Signal(str)
+
+    def __init__(self, path: str, width: int, height: int, fps: float,
+                 frames: int, parent=None):
+        super().__init__(parent)
+        self.path = path
+        self.width = width
+        self.height = height
+        self.fps = fps
+        self.frames = frames
+
+    @staticmethod
+    def proxy_path_for(path: str) -> str:
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            base = os.path.normpath(os.path.join(here, "..", "tools", "samples", ".avs3proxy"))
+            os.makedirs(base, exist_ok=True)
+            st = os.stat(path)
+            stem = os.path.splitext(os.path.basename(path))[0]
+            return os.path.join(base, f"{stem}_{st.st_size}_{int(st.st_mtime)}.mp4")
+        except Exception:
+            return ""
+
+    def run(self):
+        import re as _re
+        import shutil as _sh
+        import subprocess as _sp
+        import tempfile as _tf
+        try:
+            from .probe import _uavs3dec_path  # type: ignore
+            from . import ffmpeg_locator as _fl  # type: ignore
+        except Exception:
+            try:
+                from probe import _uavs3dec_path  # type: ignore
+                import ffmpeg_locator as _fl  # type: ignore
+            except Exception:
+                self.failed.emit("proxy: module import failed")
+                return
+        try:
+            dec = _uavs3dec_path()
+            exe = _fl.ffmpeg_path()
+            if not dec:
+                self.failed.emit("proxy: uavs3dec not found (tools/avs3bin/)")
+                return
+            if not exe:
+                self.failed.emit("proxy: ffmpeg not found")
+                return
+            out = ProxyWorker.proxy_path_for(self.path)
+            if not out:
+                self.failed.emit("proxy: cache path failed")
+                return
+            if os.path.isfile(out):
+                self.ready.emit(out)
+                return
+            w, h = int(self.width), int(self.height)
+            fps = float(self.fps or 0) or 60.0
+            self.status.emit("AVS3 代理: uavs3dec 解码中…(using AVS3 decoder)")
+            fd, tmp = _tf.mkstemp(suffix=".yuv")
+            os.close(fd)
+            try:
+                p1 = _sp.run([dec, "-i", self.path, "-o", tmp, "-l", "0"],
+                             stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, timeout=1200)
+                if p1.returncode != 0 or not os.path.isfile(tmp):
+                    self.failed.emit(f"proxy: uavs3dec exit {p1.returncode}")
+                    return
+                self.status.emit("AVS3 代理: H.264 转码中…")
+                p2 = _sp.run([exe, "-y", "-v", "error", "-f", "rawvideo",
+                              "-s", f"{w}x{h}", "-pix_fmt", "yuv420p",
+                              "-r", f"{fps:.3f}", "-i", tmp,
+                              "-c:v", "libx264", "-preset", "veryfast",
+                              "-crf", "18", "-r", f"{fps:.3f}",
+                              "-pix_fmt", "yuv420p", out],
+                             stdout=_sp.DEVNULL, stderr=_sp.PIPE,
+                             text=True, timeout=1800)
+                if p2.returncode != 0 or not os.path.isfile(out):
+                    self.failed.emit(f"proxy: x264 exit {p2.returncode}")
+                    return
+                # 帧数 1:1 校验
+                try:
+                    from . import packets as _pk  # type: ignore
+                    n = 0
+                    for _ in _pk.scan(out, fps, 0):
+                        n += 1
+                        if n > self.frames + 8:
+                            break
+                    if abs(n - self.frames) > 2:
+                        self.status.emit(f"代理帧数 {n} vs 原流 {self.frames}（分析以原流为准）")
+                except Exception:
+                    pass
+                self.ready.emit(out)
+            finally:
+                try:
+                    if os.path.isfile(tmp):
+                        os.remove(tmp)
+                except OSError:
+                    pass
+        except Exception as e:  # noqa: BLE001
+            try:
+                self.failed.emit(f"proxy: {e}")
+            except Exception:
+                pass
+
+
 # ------------------------------------------------------------- main window
 class MainWindow(QMainWindow):
     def __init__(self, initial_path: str | None = None):
@@ -322,6 +435,8 @@ class MainWindow(QMainWindow):
             self._audio = None
         self._playing = False
         self._scrubbing = False   # 拖拽中：tick 暂停推进，只显示缩略图预览，松手才真 seek
+        self._proxy_path: str | None = None   # AVS3 代理播放文件（uavs3dec+x264）
+        self._proxy: ProxyWorker | None = None
         self._range_view = None   # 范围分析时的 (rf, rt)：视图+选中区跟它走
         self._new_file_pending = False
         self._loop = False
@@ -637,6 +752,12 @@ class MainWindow(QMainWindow):
         self._check_ffmpeg(silent=True)
         self._path = path
         self._new_file_pending = True
+        self._proxy_path = None
+        try:
+            if self._proxy is not None and self._proxy.isRunning():
+                self._proxy.requestInterruption()
+        except Exception:
+            pass
         self._position = 0.0
         self._stop_decoder()
         self.video.show_frame(None)
@@ -741,6 +862,10 @@ class MainWindow(QMainWindow):
             r = self._result
             if r is None or self._path is None:
                 return
+            if self._is_avs3() and not (self._proxy_path and os.path.isfile(self._proxy_path)):
+                # AVS3 原流无解码器：等代理就绪再建（ready 回调会重调这里）
+                self._maybe_start_proxy()
+                return
             try:
                 dur = float(r.duration_seconds or r.media.duration or 0.0)
             except Exception:
@@ -756,7 +881,7 @@ class MainWindow(QMainWindow):
                     self._film.requestInterruption()
                 except Exception:
                     pass
-            self._film = FilmstripWorker(self._path, dur, w, h, self)
+            self._film = FilmstripWorker(str(self._play_path() or self._path), dur, w, h, self)
             self._film.ready.connect(self._on_thumbs)
             self._film.start()
         except Exception:
@@ -901,6 +1026,8 @@ class MainWindow(QMainWindow):
         self._show_frame_at(self._position)
         if first:
             self._start_filmstrip()
+        if first and self._is_avs3():
+            self._maybe_start_proxy()
 
     def _on_analysis_done(self, result):
         self.bar.setValue(1000)
@@ -1528,9 +1655,99 @@ class MainWindow(QMainWindow):
         self.seek(nxt)
 
     # --------------------------------------------------------- frame display
+    def _is_avs3(self) -> bool:
+        try:
+            return str(getattr(getattr(self._result, "media", None), "video_codec", "") or "").lower() in (
+                "avs3", "avs", "avs3-p2")
+        except Exception:
+            return False
+
+    def _play_path(self) -> str | None:
+        """实际播放文件：AVS3 用代理（就绪后），其余用原文件。"""
+        try:
+            if self._is_avs3() and self._proxy_path and os.path.isfile(self._proxy_path):
+                return self._proxy_path
+        except Exception:
+            pass
+        return self._path
+
+    def _maybe_start_proxy(self) -> None:
+        """AVS3：后台起代理转码（uavs3dec 解码 + x264 封装），就绪切播放/缩略图。"""
+        if not self._is_avs3() or not self._path:
+            return
+        if self._proxy_path and os.path.isfile(self._proxy_path):
+            return
+        if self._proxy is not None and self._proxy.isRunning():
+            return
+        try:
+            m = self._result.media
+            w, h, fps = int(m.width or 0), int(m.height or 0), float(m.fps or 0) or 60.0
+            n = int(getattr(self._result, "frame_count", 0) or 0)
+        except Exception:
+            return
+        if w <= 0 or h <= 0:
+            try:
+                self.lbl_status.setText("AVS3: 尺寸未知，等 uavs3dec 探头…")
+            except Exception:
+                pass
+            return
+        try:
+            cached = ProxyWorker.proxy_path_for(self._path)
+            if cached and os.path.isfile(cached):
+                self._proxy_path = cached
+                self._after_proxy_ready(cached)
+                return
+        except Exception:
+            pass
+        try:
+            self._proxy = ProxyWorker(self._path, w, h, fps, n, parent=self)
+            self._proxy.status.connect(lambda s: (self.lbl_status.setText(s), self.statusBar().showMessage(s)))
+            self._proxy.failed.connect(self._on_proxy_failed)
+            self._proxy.ready.connect(self._on_proxy_ready)
+            self._proxy.start()
+            self.lbl_status.setText("AVS3 代理转码中…(uavs3dec 解码，分析照常进行)")
+        except Exception:
+            pass
+
+    def _on_proxy_failed(self, msg: str) -> None:
+        try:
+            self.lbl_status.setText(str(msg))
+            self.statusBar().showMessage(str(msg))
+        except Exception:
+            pass
+
+    def _on_proxy_ready(self, path: str) -> None:
+        try:
+            if self._path is None or not os.path.isfile(path):
+                return
+            self._proxy_path = path
+            self._after_proxy_ready(path)
+            self.lbl_status.setText("AVS3 代理就绪（uavs3dec 解码 → H.264 播放）")
+        except Exception:
+            pass
+
+    def _after_proxy_ready(self, path: str) -> None:
+        try:
+            self._start_filmstrip()
+        except Exception:
+            pass
+        try:
+            self._restart_engine(self._position)
+            self._show_frame_at(self._position)
+        except Exception:
+            pass
+
     def _restart_engine(self, sec: float):
         # PlaybackEngine 是顺序流：seek 跳转即 restart；暂停态也 restart 以便取暂停帧
         if self._engine is None or self._result is None or self._path is None:
+            return
+        if self._is_avs3() and not (self._proxy_path and os.path.isfile(self._proxy_path)):
+            # 代理未好之前不启动引擎（原流无解码器），免刷屏报错
+            self._maybe_start_proxy()
+            try:
+                self.lbl_status.setText("AVS3 代理转码中…(uavs3dec 解码，分析照常进行)")
+            except Exception:
+                pass
             return
         try:
             w = int(self._result.media.width or 0)
@@ -1541,7 +1758,12 @@ class MainWindow(QMainWindow):
         if w <= 0 or h <= 0:
             return
         try:
-            self._engine.start(self._path, w, h, float(sec), idx)
+            seekable = bool(getattr(self._result, "timestamps_valid", True))
+            self._engine.start(str(self._play_path() or self._path), w, h, float(sec), idx,
+                               seekable=seekable)
+        except TypeError:
+            # 旧签名兼容（测试桩）
+            self._engine.start(str(self._play_path() or self._path), w, h, float(sec), idx)
         except Exception as e:  # noqa: BLE001
             try:
                 self.statusBar().showMessage(str(e))
@@ -1659,6 +1881,9 @@ class MainWindow(QMainWindow):
         r = self._result
         if not exe or r is None or self._path is None:
             return
+        if self._is_avs3() and not (self._proxy_path and os.path.isfile(self._proxy_path)):
+            self._maybe_start_proxy()
+            return
         try:
             w, h = int(r.media.width or 0), int(r.media.height or 0)
         except Exception:
@@ -1668,9 +1893,16 @@ class MainWindow(QMainWindow):
         self._stop_decoder()
         try:
             # 优先 playback.open 式快播；此处直接 ffmpeg 管道 rgb24
-            cmd = [exe, "-v", "error", "-ss", f"{max(0.0, from_sec):.3f}",
-                   "-i", self._path, "-f", "rawvideo", "-pix_fmt", "rgb24",
-                   "-vsync", "0", "-"]
+            # 无时间戳裸流：-ss 会定位失败，改从 0 起播按帧跳过
+            src = str(self._play_path() or self._path)
+            seekable = bool(getattr(r, "timestamps_valid", True))
+            if seekable:
+                cmd = [exe, "-v", "error", "-ss", f"{max(0.0, from_sec):.3f}",
+                       "-i", src, "-f", "rawvideo", "-pix_fmt", "rgb24",
+                       "-vsync", "0", "-"]
+            else:
+                cmd = [exe, "-v", "error", "-i", src, "-f", "rawvideo",
+                       "-pix_fmt", "rgb24", "-vsync", "0", "-"]
             self._dec = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
             self._dec_w, self._dec_h = w, h
             try:

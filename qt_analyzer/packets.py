@@ -116,6 +116,7 @@ def scan(
     expected: int = 0,
     progress: Optional[Callable[[float], None]] = None,
     cancel=None,
+    mark_result=None,
 ) -> list[FrameInfo]:
     """Scan the packet table of *file_path*, return frames in PTS order.
 
@@ -125,6 +126,11 @@ def scan(
     ``fraction`` in ``0..1``. *cancel* is a ``threading.Event`` (or any
     ``is_set()`` duck-type / zero-arg callable); it is checked every 256
     packets and raises :class:`CancelledError` when set.
+
+    Raw streams without timestamps (``pts_time=N/A``, e.g. ``.bit``) get
+    synthesized ``pts=dts=index/fps`` and, when *mark_result* (an
+    :class:`AnalysisResult`) is given, its ``timestamps_valid`` is set False
+    so playback avoids ``-ss``/``passthrough`` on the stream.
     """
     exe = ffprobe_path()
     if not exe:
@@ -196,6 +202,23 @@ def scan(
     frames.sort(key=lambda f: f.pts_time)
     for i, f in enumerate(frames):
         f.index = i
+
+    # ---- timestamp-less raw streams (.bit etc.): pts/dts all N/A -> 0 ----
+    # Without this the whole clip collapses to one frame duration and ffmpeg
+    # input seeking + passthrough output break. Synthesize i/fps instead.
+    try:
+        _span = max(f.pts_time for f in frames) - min(f.pts_time for f in frames)
+    except Exception:
+        _span = 0.0
+    if len(frames) > 1 and _span <= 1e-6:
+        for i, f in enumerate(frames):
+            f.pts_time = i * fallback
+            f.dts_time = i * fallback
+        if mark_result is not None:
+            try:
+                mark_result.timestamps_valid = False
+            except Exception:
+                pass
 
     # ---- derived per-frame values --------------------------------------
     since_key = 0
