@@ -311,6 +311,7 @@ class MainWindow(QMainWindow):
         except Exception:
             self._audio = None
         self._playing = False
+        self._scrubbing = False   # 拖拽中：tick 暂停推进，只显示缩略图预览，松手才真 seek
         self._loop = False
         self._follow = True
         self._dec = None          # 内置回退 ffmpeg rawvideo 管（无 PlaybackEngine 时用）
@@ -449,8 +450,12 @@ class MainWindow(QMainWindow):
         tl = QHBoxLayout()
         self.timeline = QSlider(Qt.Orientation.Horizontal, left)
         self.timeline.setRange(0, 10000)
-        self.timeline.sliderMoved.connect(self._on_timeline_moved)
-        self.timeline.sliderReleased.connect(self._on_timeline_released)
+        try:
+            self.timeline.sliderPressed.connect(self._on_scrub_started)
+        except Exception:
+            pass
+        self.timeline.sliderMoved.connect(self._on_scrub_preview)
+        self.timeline.sliderReleased.connect(self._on_scrub_released)
         self.lbl_time = QLabel("0:00.000 / 0:00.000", left)
         tl.addWidget(self.timeline, 1)
         tl.addWidget(self.lbl_time)
@@ -458,7 +463,15 @@ class MainWindow(QMainWindow):
 
         self.graphs = GraphStack(left)
         self.graphs.setMinimumHeight(6 * 64)
-        self.graphs.seek_requested.connect(self.seek)
+        self.graphs.seek_requested.connect(self._on_seek_requested)
+        try:
+            self.graphs.scrub_started.connect(self._on_scrub_started)
+        except Exception:
+            pass
+        try:
+            self.graphs.scrub_finished.connect(self._on_scrub_finished)
+        except Exception:
+            pass
         self.graphs.range_selected.connect(self._on_graph_range)
         self.graphs.view_changed.connect(self._on_graph_view)
         lv.addWidget(self.graphs, 1)
@@ -1231,16 +1244,72 @@ class MainWindow(QMainWindow):
         m = int(s // 60)
         return f"{m}:{s - m * 60:06.3f}"
 
-    def _on_timeline_moved(self, v: int):
+    def _on_scrub_started(self) -> None:
+        """拖拽开始：tick 暂停推进，拖动只做缩略图预览。"""
+        self._scrubbing = True
+
+    def _on_seek_requested(self, sec: float) -> None:
+        """graph 点击/拖动：拖拽中只预览，单击（无拖拽）直接 seek。"""
+        if self._scrubbing:
+            self._scrub_preview(float(sec))
+        else:
+            self.seek(float(sec))
+
+    def _on_scrub_preview(self, v: int) -> None:
+        """slider 拖动中：只动 playhead + 缩略图，不碰解码器。"""
+        self._scrub_preview(v / 10000.0 * self._dur_seconds())
+
+    def _dur_seconds(self) -> float:
         try:
             r = self._result
             dur = float(r.duration_seconds) if r is not None and r.frames else 1.0
         except Exception:
             dur = 1.0
-        self.seek(v / 10000.0 * max(0.04, dur))
+        return max(0.04, dur)
 
-    def _on_timeline_released(self):
-        pass
+    def _scrub_preview(self, sec: float) -> None:
+        dur = self._dur_seconds()
+        sec = max(0.0, min(dur, float(sec)))
+        self._position = sec
+        self.graphs.set_playhead(sec)
+        if self._follow:
+            span = self._view_end - self._view_start
+            if sec < self._view_start or sec > self._view_end or self._follow:
+                self._center_view()
+        self._update_timeline()
+        self._show_thumbnail(sec)
+        self._update_frame_detail()
+
+    def _show_thumbnail(self, sec: float) -> None:
+        """只用 filmstrip/预存缩略图显示，绝不碰解码器队列。"""
+        if self._strip is not None:
+            try:
+                thumb = self._strip.at(sec)
+                if thumb is not None:
+                    self.video.show_frame(np.ascontiguousarray(thumb, dtype=np.uint8))
+                    return
+            except Exception:
+                pass
+        if self._thumbs:
+            try:
+                best = min(self._thumbs, key=lambda t: abs(float(t[1]) - sec))
+                self.video.show_frame(np.ascontiguousarray(best[0], dtype=np.uint8))
+                return
+            except Exception:
+                pass
+
+    def _on_scrub_released(self) -> None:
+        """slider 松手： exactly one real seek（原版语义）。"""
+        try:
+            v = int(self.timeline.value())
+        except Exception:
+            v = 0
+        self._on_scrub_finished(v / 10000.0 * self._dur_seconds())
+
+    def _on_scrub_finished(self, sec: float) -> None:
+        """拖拽结束：一次真 seek（解码器 restart），播放态则从新位置继续。"""
+        self._scrubbing = False
+        self.seek(float(sec))
 
     # ------------------------------------------------------------- transport
     def toggle_play(self):
@@ -1310,6 +1379,8 @@ class MainWindow(QMainWindow):
             self.seek(r.frames[0].pts_time)
 
     def _tick(self):
+        if self._scrubbing:
+            return  # 拖拽中不推进：松手才 seek，避免和拖回去的位置打架
         r = self._result
         if r is None or not r.frames:
             self.pause()

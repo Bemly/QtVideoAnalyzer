@@ -28,6 +28,8 @@ class GraphStack(QWidget):
     """Single widget drawing 6 linked rows sharing one time axis."""
 
     seek_requested = Signal(float)
+    scrub_started = Signal()
+    scrub_finished = Signal(float)
     range_selected = Signal(float, float)
     view_changed = Signal(float, float)
 
@@ -302,6 +304,10 @@ class GraphStack(QWidget):
     def mousePressEvent(self, ev) -> None:  # noqa: N802
         if ev.button() == Qt.MouseButton.LeftButton:
             self._dragging = True
+            try:
+                self.scrub_started.emit()
+            except Exception:
+                pass
             self.seek_requested.emit(max(self._vs, min(self._ve, self._x2t(ev.position().x()))))
         elif ev.button() == Qt.MouseButton.RightButton:
             t = max(self._vs, min(self._ve, self._x2t(ev.position().x())))
@@ -322,7 +328,12 @@ class GraphStack(QWidget):
     def mouseReleaseEvent(self, ev) -> None:  # noqa: N802
         if ev.button() == Qt.MouseButton.LeftButton:
             self._dragging = False
-            self.seek_requested.emit(max(self._vs, min(self._ve, self._x2t(ev.position().x()))))
+            t = max(self._vs, min(self._ve, self._x2t(ev.position().x())))
+            try:
+                self.scrub_finished.emit(t)
+            except Exception:
+                pass
+            self.seek_requested.emit(t)
         super().mouseReleaseEvent(ev)
 
     def mouseDoubleClickEvent(self, ev) -> None:  # noqa: N802
