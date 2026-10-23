@@ -211,6 +211,62 @@ def _run_mv_pass(result: AnalysisResult, sl: dict, progress=None, cancel=None) -
 
 # ---------------------------------------------------------------- estimate fallback
 
+def _decode_avs3_yuv(media, progress=None, cancel=None) -> str | None:
+    """Full uavs3dec pass to a temp yuv420 file. Caller deletes it."""
+    import os as _os
+    import subprocess as _sp
+    import tempfile as _tf
+    try:
+        from .probe import _uavs3dec_path  # type: ignore
+    except ImportError:
+        try:
+            from probe import _uavs3dec_path  # type: ignore
+        except ImportError:
+            return None
+    exe = _uavs3dec_path()
+    if not exe:
+        return None
+    try:
+        w, h = int(media.width or 0), int(media.height or 0)
+    except Exception:
+        return None
+    if w <= 0 or h <= 0:
+        return None
+    _report(progress, "Decoding AVS3 (uavs3dec)…", 0.02)
+    try:
+        fd, tmp = _tf.mkstemp(suffix=".yuv")
+        _os.close(fd)
+    except Exception:
+        return None
+    try:
+        if _cancelled(cancel):
+            raise asyncio.CancelledError()
+        p = _sp.run([exe, "-i", media.file_path, "-o", tmp, "-l", "0"],
+                    stdout=_sp.DEVNULL, stderr=_sp.DEVNULL, timeout=3600)
+        if p.returncode != 0 or not _os.path.isfile(tmp):
+            try:
+                if _os.path.isfile(tmp):
+                    _os.remove(tmp)
+            except OSError:
+                pass
+            return None
+        return tmp
+    except asyncio.CancelledError:
+        try:
+            if _os.path.isfile(tmp):
+                _os.remove(tmp)
+        except OSError:
+            pass
+        raise
+    except Exception:
+        try:
+            if _os.path.isfile(tmp):
+                _os.remove(tmp)
+        except OSError:
+            pass
+        return None
+
+
 def _run_estimate(result: AnalysisResult, sl: dict, progress=None, cancel=None) -> None:
     import numpy as np
 
@@ -233,19 +289,40 @@ def _run_estimate(result: AnalysisResult, sl: dict, progress=None, cancel=None) 
     if last < first:
         return
 
-    args = ["-v", "error", "-hide_banner"]
-    if sl["start"] > 0.01:
-        args += ["-ss", f"{sl['start']:.3f}"]
-    args += ["-i", media.file_path]
-    if sl["ranged"]:
-        args += ["-t", f"{sl['length']:.3f}"]
-    args += ["-an", "-vf",
-             f"scale={small_w}:{small_h}:flags=fast_bilinear,format=gray",
-             "-f", "rawvideo", "-pix_fmt", "gray",
-             "-fps_mode", "passthrough", "pipe:1"]
-
     buf_size = small_w * small_h
     grays: list[bytes] = []
+    tmp_yuv: str | None = None
+    try:
+        codec = str(getattr(media, "video_codec", "") or "").lower()
+    except Exception:
+        codec = ""
+    avs3_src: str | None = None
+    if codec in ("avs3", "avs", "avs3-p2"):
+        # ffmpeg cannot decode AVS3 at all: full uavs3dec pass to yuv,
+        # then the same ffmpeg scale-to-gray pipe reads the yuv file.
+        avs3_src = _decode_avs3_yuv(media, progress, cancel)
+        if avs3_src is None:
+            return
+        tmp_yuv = avs3_src
+
+    if avs3_src is not None:
+        args = ["-v", "error", "-hide_banner", "-f", "rawvideo",
+                "-s", f"{media.width}x{media.height}", "-pix_fmt", "yuv420p",
+                "-i", avs3_src, "-an", "-vf",
+                f"scale={small_w}:{small_h}:flags=fast_bilinear,format=gray",
+                "-f", "rawvideo", "-pix_fmt", "gray", "pipe:1"]
+    else:
+        args = ["-v", "error", "-hide_banner"]
+        if sl["start"] > 0.01:
+            args += ["-ss", f"{sl['start']:.3f}"]
+        args += ["-i", media.file_path]
+        if sl["ranged"]:
+            args += ["-t", f"{sl['length']:.3f}"]
+        args += ["-an", "-vf",
+                 f"scale={small_w}:{small_h}:flags=fast_bilinear,format=gray",
+                 "-f", "rawvideo", "-pix_fmt", "gray",
+                 "-fps_mode", "passthrough", "pipe:1"]
+
     proc = subprocess.Popen([exe] + args, stdout=subprocess.PIPE,
                             stderr=subprocess.DEVNULL, bufsize=10 * 1024 * 1024)
     try:
@@ -269,6 +346,15 @@ def _run_estimate(result: AnalysisResult, sl: dict, progress=None, cancel=None) 
                 proc.kill()
             except Exception:
                 pass
+        try:
+            if tmp_yuv and os.path.isfile(tmp_yuv):
+                os.remove(tmp_yuv)
+        except OSError:
+            pass
+    if avs3_src is not None and len(grays) > last - first + 1:
+        # full decode above; keep only the requested slice (same indexing
+        # as the ffmpeg pipe path, which starts at the slice).
+        grays = grays[first:last + 1]
     if not grays:
         return
 

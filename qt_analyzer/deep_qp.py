@@ -420,10 +420,75 @@ def _run_show_frames_fallback(result: AnalysisResult, sl: dict) -> int:
         if best is not None and best != PicType.Other:
             # Never demote a true packet-level keyframe away from I.
             if f.key_frame and f.type == PicType.I and best != PicType.I:
-                continue
+                # AVS3 除外：demuxer 的 key 旗标不可靠（随机接入点≠I 帧），
+                # 解码器真值优先。
+                try:
+                    _ac = str(getattr(result.media, "video_codec", "") or "").lower()
+                except Exception:
+                    _ac = ""
+                if _ac not in ("avs3", "avs", "avs3-p2"):
+                    continue
             if f.type != best:
                 f.type = best
                 filled += 1
+    return filled
+
+
+def _run_avs3_fallback(result: AnalysisResult, sl: dict, cancel=None) -> int:
+    """AVS3 picture types from the uavs3dec frame log (decode order).
+
+    Returns filled count. Only touches Other frames and propagated I's on
+    non-key frames; keyframes keep I. No decoder -> 0, never raises
+    (except CancelledError passthrough by contract).
+    """
+    try:
+        codec = str(getattr(result.media, "video_codec", "") or "").lower()
+    except Exception:
+        return 0
+    if codec not in ("avs3", "avs", "avs3-p2"):
+        return 0
+    frames = result.frames
+    if not frames:
+        return 0
+    first = max(0, sl["first"])
+    last = min(sl["last"], len(frames) - 1)
+    if last < first:
+        return 0
+    if _cancelled(cancel):
+        raise asyncio.CancelledError()
+    try:
+        from . import codec_avs3 as _a  # type: ignore
+    except ImportError:
+        try:
+            import codec_avs3 as _a  # type: ignore
+        except ImportError:
+            return 0
+    try:
+        types = _a.frame_types(result.media.file_path)
+    except Exception:
+        return 0
+    if not types:
+        return 0
+    by_decode = {f.decode_index: f for f in frames
+                 if f.decode_index is not None and f.decode_index >= 0}
+    filled = 0
+    # NOTE: uavs3dec always decodes the whole file from 0 (no -ss), so the
+    # log line number IS the true decode index: no slice offset here,
+    # unlike the ffmpeg -debug qp pass which restarts at the slice keyframe.
+    for local, letter in enumerate(types):
+        f = by_decode.get(local)
+        if f is None or not (first <= f.index <= last):
+            continue
+        want = {"I": PicType.I, "P": PicType.P, "B": PicType.B}.get(letter)
+        if want is None or want == PicType.Other:
+            continue
+        # AVS3 demuxer key 旗标不可靠：解码器真值优先，
+        # key 帧也可纠为 B；已是 P/B 的不动（AVS3 不会出现，走个安全）。
+        if f.type != PicType.Other and f.type != PicType.I:
+            continue
+        if f.type != want:
+            f.type = want
+            filled += 1
     return filled
 
 
@@ -479,6 +544,17 @@ def run_type_qp(result: AnalysisResult, progress=None, cancel=None,
         try:
             _run_show_frames_fallback(result, sl)
             _infer_missing_types(result, sl)
+        except Exception:
+            pass
+        # AVS3: neither dump exists; the reference decoder log carries truth.
+        # When it fills, its I/P/B stand as-is: no trailing inference that
+        # would re-promote packet-level key flags back to I.
+        try:
+            _avs3_filled = _run_avs3_fallback(result, sl, cancel)
+            if not _avs3_filled:
+                _infer_missing_types(result, sl)
+        except asyncio.CancelledError:
+            raise
         except Exception:
             pass
         if all(f.qp_avg is None for f in result.frames):

@@ -247,6 +247,13 @@ class AnalysisResult:
                 lo = mid + 1
             else:
                 hi = mid - 1
+        # 同 pts 的帧取段首（时间戳缺失的裸流会有大段 0 值；取段尾会
+        # 让 seek(0)/切片起点跳到段尾，播放与切片全错位）
+        try:
+            while best > 0 and self.frames[best - 1].pts_time == self.frames[best].pts_time:
+                best -= 1
+        except Exception:
+            pass
         return self.frames[best]
 
     def index_at(self, seconds: float) -> int:

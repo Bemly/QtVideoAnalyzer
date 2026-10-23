@@ -147,3 +147,38 @@ def decode_capability_note() -> str:
             "本机 ffmpeg 9.0.2 仅能解析 avs3（codec_name=avs3, has_b_frames=1）"
             "而无解码器：-debug qp/mv 与 -show_frames 均为空，QP/运动走估算分支"
             "（运动测的是真解码像素经无损转封装后的 Farneback 流场）。")
+
+
+def _decoder_path() -> str | None:
+    try:
+        from .probe import _uavs3dec_path  # type: ignore
+        return _uavs3dec_path()
+    except Exception:
+        try:
+            from probe import _uavs3dec_path  # type: ignore
+            return _uavs3dec_path()
+        except Exception:
+            return None
+
+
+def frame_types(file_path: str, cancel=None) -> list | None:
+    """True picture types in decode order from the uavs3dec frame log.
+
+    ``-debug qp``/``show_frames`` give nothing for AVS3, but the reference
+    decoder logs ``idx poc (I|P|B) [L0 ..] [L1 ..]`` per decoded frame.
+    Returns e.g. ``['I','B','B',...]`` or None when unavailable.
+    """
+    import re as _re
+    import subprocess as _sp
+    exe = _decoder_path()
+    if not exe:
+        return None
+    try:
+        p = _sp.run([exe, "-i", file_path, "-o", "/dev/null", "-l", "2"],
+                    stdout=_sp.PIPE, stderr=_sp.STDOUT,
+                    text=True, errors="ignore", timeout=1800)
+    except Exception:
+        return None
+    out = p.stdout or ""
+    types = _re.findall(r"\(\s*([IPB])\s*\)", out)
+    return types or None
