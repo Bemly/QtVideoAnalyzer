@@ -339,6 +339,42 @@ class MainWindow(QMainWindow):
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
 
+        # ---- file row 文件行：导入自己的视频 + 示例片快捷切换 ----
+        fr = QHBoxLayout()
+        self.btn_import = QPushButton("📂 导入视频", left)
+        self.btn_import.setToolTip("导入自己的视频进行分析 Import video (Ctrl+O，支持拖拽)")
+        try:
+            self.btn_import.clicked.connect(self._on_open_action)
+        except Exception:
+            pass
+        fr.addWidget(self.btn_import)
+        fr.addWidget(QLabel("示例片", left))
+        self.cmb_samples = QComboBox(left)
+        self.cmb_samples.setToolTip("示例片快捷切换 Sample clips (tools/samples/)")
+        self.cmb_samples.setMinimumWidth(200)
+        try:
+            self.cmb_samples.activated.connect(self._on_sample_chosen)
+        except Exception:
+            pass
+        fr.addWidget(self.cmb_samples, 1)
+        self.btn_samples_reload = QPushButton("↻", left)
+        self.btn_samples_reload.setFixedWidth(30)
+        self.btn_samples_reload.setToolTip("刷新示例片列表")
+        try:
+            self.btn_samples_reload.clicked.connect(lambda: self._reload_samples(keep=True))
+        except Exception:
+            pass
+        fr.addWidget(self.btn_samples_reload)
+        self.lbl_file = QLabel("未打开 no file", left)
+        self.lbl_file.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        fr.addWidget(self.lbl_file)
+        lv.addLayout(fr)
+        try:
+            self._sample_setting = False
+            self._reload_samples()
+        except Exception:
+            pass
+
         self.video = VideoWidget(left)
         lv.addWidget(self.video, 1)
 
@@ -578,7 +614,100 @@ class MainWindow(QMainWindow):
         self._position = 0.0
         self._stop_decoder()
         self.video.show_frame(None)
+        try:
+            self.lbl_file.setText(os.path.basename(path))
+            self.lbl_file.setToolTip(path)
+        except Exception:
+            pass
+        self._sync_sample_combo(path)
         self._start_analysis(path, 0.0, -1.0)
+
+    # ------------------------------------------------- samples 示例片
+    @staticmethod
+    def _sample_files() -> list:
+        """tools/samples 下的视频文件(绝对路径,排序)。永不抛错。"""
+        try:
+            here = os.path.dirname(os.path.abspath(__file__))
+            base = os.path.normpath(os.path.join(here, "..", "tools", "samples"))
+            exts = (".mp4", ".mov", ".mkv", ".webm", ".mpg", ".mpeg", ".ts", ".m2ts",
+                    ".ogv", ".ogm", ".flv", ".3gp", ".3g2", ".avs3", ".avs",
+                    ".266", ".vvc", ".bit", ".obu", ".ivf", ".y4m", ".avi")
+            out = []
+            for n in sorted(os.listdir(base)):
+                if n.lower().endswith(exts):
+                    p = os.path.join(base, n)
+                    try:
+                        if os.path.isfile(p):
+                            out.append(p)
+                    except Exception:
+                        continue
+            return out
+        except Exception:
+            return []
+
+    def _reload_samples(self, keep: bool = False) -> None:
+        try:
+            cur = None
+            if keep:
+                try:
+                    cur = str(self.cmb_samples.currentData() or "")
+                except Exception:
+                    cur = None
+            self._sample_setting = True
+            self.cmb_samples.clear()
+            self.cmb_samples.addItem("示例片 Sample…", None)
+            for p in self._sample_files():
+                self.cmb_samples.addItem(os.path.basename(p), p)
+            if keep and cur:
+                for i in range(self.cmb_samples.count()):
+                    try:
+                        if str(self.cmb_samples.itemData(i) or "") == cur:
+                            self.cmb_samples.setCurrentIndex(i)
+                            break
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        finally:
+            try:
+                self._sample_setting = False
+            except Exception:
+                pass
+
+    def _sync_sample_combo(self, path: str) -> None:
+        """当前文件若在示例片列表里就选中它，否则回到首项。"""
+        try:
+            self._sample_setting = True
+            target = os.path.abspath(path)
+            hit = 0
+            for i in range(self.cmb_samples.count()):
+                try:
+                    d = self.cmb_samples.itemData(i)
+                    if d and os.path.abspath(str(d)) == target:
+                        hit = i
+                        break
+                except Exception:
+                    continue
+            self.cmb_samples.setCurrentIndex(hit)
+        except Exception:
+            pass
+        finally:
+            try:
+                self._sample_setting = False
+            except Exception:
+                pass
+
+    def _on_sample_chosen(self, index: int) -> None:
+        if getattr(self, "_sample_setting", False):
+            return
+        try:
+            if index <= 0:
+                return
+            p = self.cmb_samples.itemData(index)
+            if p:
+                self.open_file(str(p))
+        except Exception:
+            pass
 
     def _start_filmstrip(self):
         # filmstrip 后台 build（有 duration/尺寸后才真跑）
