@@ -147,3 +147,9 @@ size=147414166
 - 关于 Blender Tears of Steel：官方 4K 版是 **H.264** `.mov`（6.3GB，
   `https://mango.blender.org/download`），**无官方 HEVC 版**，
   故用 Jellyfin 4K HEVC-10bit（真实 4K HEVC）+ Jellyfish H.265（真实 HEVC 自然内容）代替。
+
+## 真实内容重转
+
+本目录下 testsrc2 合成的本地变体已用 Sintel 预告片（`tools/samples/test_avc_sintel_trailer.mp4`
+第 5~10 秒，真 3D 运镜）重转：`tools/retranscode_from_sintel.sh`，profile×chroma×RC 设置不变，
+只换像素源。ffprobe 实测 profile/pix_fmt 与命名一致，分析 I/P/B 正常。
