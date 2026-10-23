@@ -44,6 +44,7 @@ _THROTTLE_SEC = 0.8  # 分析流式刷新节流 (spec: 8s -> 取 0.8s，保证�
 # ------------------------------------------------------------- workers
 class AnalysisWorker(QThread):
     status = Signal(str)
+    progress = Signal(int)   # 0..1000 permille，对应 ANALYSIS 进度条
     result_updated = Signal(object)
     failed = Signal(str)
     finished_ok = Signal(object)
@@ -98,7 +99,16 @@ class AnalysisWorker(QThread):
         except Exception:
             _pl = None
         upd = lambda r: self._throttled_emit(r)  # noqa: E731
-        stage = lambda name, frac: self.status.emit(f"{name} {frac * 100:.0f}%")  # noqa: E731
+        def _stage(name, frac):  # noqa: E731
+            try:
+                self.status.emit(f"{name} {frac * 100:.0f}%")
+            except Exception:
+                pass
+            try:
+                self.progress.emit(max(0, min(1000, int(frac * 1000))))
+            except Exception:
+                pass
+        stage = _stage
         if _pl is not None and hasattr(_pl, "run_analysis"):
             # 范围重跑：已有结果 + run_range 时只重跑深分析
             if (self.prior is not None and self.range_to > self.range_from
@@ -312,6 +322,8 @@ class MainWindow(QMainWindow):
             self._audio = None
         self._playing = False
         self._scrubbing = False   # 拖拽中：tick 暂停推进，只显示缩略图预览，松手才真 seek
+        self._range_view = None   # 范围分析时的 (rf, rt)：视图+选中区跟它走
+        self._new_file_pending = False
         self._loop = False
         self._follow = True
         self._dec = None          # 内置回退 ffmpeg rawvideo 管（无 PlaybackEngine 时用）
@@ -624,6 +636,7 @@ class MainWindow(QMainWindow):
             return
         self._check_ffmpeg(silent=True)
         self._path = path
+        self._new_file_pending = True
         self._position = 0.0
         self._stop_decoder()
         self.video.show_frame(None)
@@ -773,6 +786,10 @@ class MainWindow(QMainWindow):
             self._worker.wait(500)
         self._worker = AnalysisWorker(path, rf, rt, prior=self._result, parent=self)
         self._worker.status.connect(lambda s: (self.lbl_status.setText(s), self.statusBar().showMessage(s)))
+        try:
+            self._worker.progress.connect(self.bar.setValue)
+        except Exception:
+            pass
         self._worker.result_updated.connect(self._on_result)
         self._worker.failed.connect(lambda e: self.lbl_status.setText(f"analysis failed: {e}"))
         self._worker.finished_ok.connect(self._on_analysis_done)
@@ -783,9 +800,48 @@ class MainWindow(QMainWindow):
     def _on_analyse_range(self):
         if not self._path:
             return
+        try:
+            r = self._result
+            dur = float(r.duration_seconds) if r is not None and r.frames else float(
+                r.media.duration if r is not None and getattr(r, "media", None) is not None else 0.0)
+        except Exception:
+            dur = 0.0
+        if dur <= 0:
+            try:
+                dur = max(0.04, float(self.spin_to.value() or 0))
+            except Exception:
+                dur = 0.0
         rf = float(self.spin_from.value())
         rt = float(self.spin_to.value())
+        if rf < 0:
+            rf = 0.0
+        if rt < 0 or rt > dur:
+            rt = dur
+        if rf < 0:
+            rf = 0.0
+        if dur > 0 and rt - rf < 0.05:
+            self.lbl_status.setText("范围太小（起止至少差 0.05s），已忽略")
+            return
+        full = (rf <= 0.01) and (dur <= 0 or rt >= dur - 0.01)
+        if full:
+            self._range_view = None
+            self._start_analysis(self._path, 0.0, -1.0)
+            return
+        self._range_view = (rf, rt)
         self._start_analysis(self._path, rf, rt)
+        # 视图立刻跟到范围内：先 seek 到起点，再把时间轴收窄到 [rf, rt]
+        try:
+            self.seek(rf)
+        except Exception:
+            pass
+        try:
+            self._view_start, self._view_end = rf, rt
+            self.graphs.set_view(rf, rt)
+            self.graphs.set_selected_range(rf, rt)
+            self.graphs.set_playhead(self._position)
+        except Exception:
+            pass
+        self.lbl_status.setText(f"分析范围 {rf:.2f}s – {rt:.2f}s（时间轴已跟随）")
 
     def _on_cancel(self):
         if self._worker is not None and self._worker.isRunning():
@@ -796,15 +852,38 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText("cancel requested 已取消 (保留已有结果)")
 
     def _on_result(self, result):
-        first = self._result is None or getattr(self._result, "frame_count", 0) == 0
+        first = self._new_file_pending or self._result is None or getattr(self._result, "frame_count", 0) == 0
+        self._new_file_pending = False
         self._result = result
         try:
             total = float(result.duration_seconds) if result.frames else float(result.media.duration or 1.0)
         except Exception:
             total = 1.0
         total = max(0.04, total)
-        self._view_start, self._view_end = 0.0, total
-        self.spin_to.setValue(total)
+        if first:
+            # 新文件：视图回到全片，起止框回到默认
+            self._range_view = None
+            self._view_start, self._view_end = 0.0, total
+            try:
+                self.spin_from.setValue(0.0)
+                self.spin_to.setValue(total)
+            except Exception:
+                pass
+            self.graphs.set_view(self._view_start, self._view_end)
+            try:
+                self.graphs.set_selected_range(0.0, 0.0)
+            except Exception:
+                pass
+        elif self._range_view is not None:
+            # 范围重跑的流式更新：保持范围视图，不重置回全片
+            try:
+                rf, rt = self._range_view
+                self._view_start, self._view_end = float(rf), float(rt)
+                self.graphs.set_view(float(rf), float(rt))
+                self.graphs.set_selected_range(float(rf), float(rt))
+            except Exception:
+                pass
+        # 非首包流式更新：不动视图（避免和用户缩放打架），只刷新数据
         self.graphs.set_result(result)
         self.graphs.set_view(self._view_start, self._view_end)
         self.graphs.set_playhead(self._position)
