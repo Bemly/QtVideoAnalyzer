@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import asyncio
 import os
 import subprocess
 import sys
@@ -86,11 +87,18 @@ class AnalysisWorker(QThread):
                 self.finished_ok.emit(result)
             else:
                 self.failed.emit("analysis returned nothing")
+        except asyncio.CancelledError:
+            # 取消是正常流程（切文件/点取消/范围重跑顶掉旧任务）：静默收尾，
+            # 不走 failed，也不让堆栈漏到 QThread 边界吓人。
+            pass
         except Exception as e:  # noqa: BLE001
-            try:
-                self.failed.emit(str(e))
-            except Exception:
-                pass
+            if type(e).__name__ == "CancelledError":
+                pass  # packets.CancelledError：同上，用户取消/任务被顶掉
+            else:
+                try:
+                    self.failed.emit(str(e))
+                except Exception:
+                    pass
 
     def _run_pipeline(self):
         # 优先走 pipeline.run_analysis（probe->packets 立即可播，deep 并行 qp+motion）
@@ -392,6 +400,8 @@ class ProxyWorker(QThread):
                         os.remove(tmp)
                 except OSError:
                     pass
+        except asyncio.CancelledError:
+            pass  # 取消属正常流程，静默收尾
         except Exception as e:  # noqa: BLE001
             try:
                 self.failed.emit(f"proxy: {e}")
