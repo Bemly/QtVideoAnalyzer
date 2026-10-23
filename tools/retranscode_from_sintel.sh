@@ -35,7 +35,7 @@ ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "$S360" -an -c:v libsv
 echo "== H.263 =="
 ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "scale=176:144" -an -c:v h263 -pix_fmt yuv420p -b:v 128k -maxrate 128k -bufsize 256k -g 30 tools/samples/test_h263_qcif_cbr.mov
 ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "scale=352:288" -an -c:v h263 -pix_fmt yuv420p -q:v 3 -g 30 tools/samples/test_h263_cif_vbr.mov
-ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "scale=352:288" -an -c:v h263p -pix_fmt yuv420p -umv -aiv -b:v 1M -g 30 tools/samples/test_h263plus_annex.mov
+ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "scale=352:288" -an -c:v h263p -pix_fmt yuv420p -umv 1 -aiv 1 -b:v 1M -g 30 tools/samples/test_h263plus_annex.mov
 
 echo "== VP8 =="
 ffmpeg -hide_banner -loglevel error -y $SEG -i "$SRC" -vf "$S360" -an -c:v libvpx -pix_fmt yuv420p -b:v 1500k -minrate 1500k -maxrate 1500k -bufsize 1500k -deadline realtime -cpu-used 5 -lag-in-frames 0 -auto-alt-ref 0 tools/samples/test_vp8_cbr_realtime.webm
