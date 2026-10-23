@@ -186,3 +186,9 @@ bit_rate=275498
 三路本地片各 90 帧（`ffprobe -show_frames` 实计数）且 I=3/P=87/B=0：
 初始 1 个 I + 红闪场景切换触发 2 个额外 I，其余全 P——AV1 无 B 帧，B=0 为正常。
 真片 `Spark` 共 13775 帧，I=41/P=13734/B=0，同为 AV1 典型分布。
+
+## 真实内容重转
+
+本目录下 testsrc2 合成的本地变体已用 Sintel 预告片（`tools/samples/test_avc_sintel_trailer.mp4`
+第 5~10 秒，真 3D 运镜）重转：`tools/retranscode_from_sintel.sh`，profile×chroma×RC 设置不变，
+只换像素源。ffprobe 实测 profile/pix_fmt 与命名一致，分析 I/P/B 正常。
