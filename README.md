@@ -19,6 +19,20 @@ playback and graphs are pure Qt.
 
 ---
 
+## Screenshots
+
+| AVC + motion vectors (Sintel) | VP6 + segmentation (Fox logo) |
+|---|---|
+| ![AVC Sintel](docs/snapshots/overview-avc-sintel.png) | ![VP6 Fox](docs/snapshots/vp6-fox.png) |
+| AVS-style partitions, fwd/bwd vectors, AltRef stars, full B/I/P analysis | TrueMotion Golden-era clip with VP segment map overlay |
+
+| AV1 superblocks (mid-analysis) | ProRes 4444 slices (all-intra) | Theora DCT dots (field footage) |
+|---|---|---|
+| ![AV1 Spark](docs/snapshots/av1-spark.png) | ![ProRes 4444](docs/snapshots/prores-4444.png) | ![Theora field](docs/snapshots/theora-field.png) |
+| 128×128 SB grid + live 54% progress bar | 8 slice stripes + all-red I lane | 8×8 DCT noise dots over real camera footage |
+
+---
+
 ## What it is
 
 A video file is a stream of decisions an encoder made: how many bits each frame got, which

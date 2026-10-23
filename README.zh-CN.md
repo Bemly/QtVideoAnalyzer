@@ -17,6 +17,20 @@
 
 ---
 
+## 软件截图
+
+| AVC + 运动矢量（Sintel） | VP6 + 分段（狐狸台标） |
+|---|---|
+| ![AVC Sintel](docs/snapshots/overview-avc-sintel.png) | ![VP6 Fox](docs/snapshots/vp6-fox.png) |
+| AVC 分区、前/后向矢量、AltRef 星，B/I/P 全量分析 | TrueMotion 黄金时代片 + VP 分段覆盖层 |
+
+| AV1 超块（分析中） | ProRes 4444 切片（全 I 帧） | Theora DCT 点阵（实拍） |
+|---|---|---|
+| ![AV1 Spark](docs/snapshots/av1-spark.png) | ![ProRes 4444](docs/snapshots/prores-4444.png) | ![Theora field](docs/snapshots/theora-field.png) |
+| 128×128 SB 网格 + 54% 实时进度条 | 8 条 slice 横条 + I 全红排 | 真实机位画面上的 8×8 DCT 噪声点 |
+
+---
+
 ## 这是什么
 
 视频文件是编码器做的一连串决定的记录：每帧分了多少比特、哪些是关键帧、量化器花在哪、
