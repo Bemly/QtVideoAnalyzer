@@ -151,3 +151,9 @@ size=195147
 bit_rate=520511
 db93d14148c47a3753a335ba6ff18a51f069531b3b87c6fc9bf5939373ca963d  net_sample_vp9.webm
 ```
+
+## 真实内容重转
+
+本目录下 testsrc2 合成的本地变体已用 Sintel 预告片（`tools/samples/test_avc_sintel_trailer.mp4`
+第 5~10 秒，真 3D 运镜）重转：`tools/retranscode_from_sintel.sh`，profile×chroma×RC 设置不变，
+只换像素源。ffprobe 实测 profile/pix_fmt 与命名一致，分析 I/P/B 正常。
