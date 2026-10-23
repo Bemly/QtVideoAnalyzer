@@ -12,13 +12,17 @@
 """
 from __future__ import annotations
 
-CODECS = ["avc", "hevc", "mpeg2", "theora", "av1", "h263", "vp6", "vp8", "vp9"]
+CODECS = ["avc", "hevc", "mpeg2", "theora", "av1", "h263", "vp6", "vp8", "vp9",
+          "prores", "vvc", "av2", "avs3"]
 
 # ---- 可选家族模块：缺失则为 None（import 永不抛错） ----
 _m_avc = None
 _m_hevc = None
 _m_vp = None
 _m_tav1 = None
+_m_next = None
+_m_prores = None
+_m_avs3 = None
 try:
     from . import codec_avc_h263 as _m_avc  # type: ignore
 except Exception:
@@ -35,6 +39,18 @@ try:
     from . import codec_theora_av1 as _m_tav1  # type: ignore
 except Exception:
     _m_tav1 = None
+try:
+    from . import codec_next as _m_next  # type: ignore  # vvc / av2
+except Exception:
+    _m_next = None
+try:
+    from . import codec_prores as _m_prores  # type: ignore
+except Exception:
+    _m_prores = None
+try:
+    from . import codec_avs3 as _m_avs3  # type: ignore
+except Exception:
+    _m_avs3 = None
 
 
 def codec_key(video_codec: object) -> str:
@@ -60,6 +76,12 @@ def codec_key(video_codec: object) -> str:
         "vp6": "vp6", "vp6f": "vp6", "vp6s": "vp6",
         "vp8": "vp8", "libvpx": "vp8",
         "vp9": "vp9", "libvpx-vp9": "vp9",
+        "prores": "prores", "prores_ks": "prores", "prores_aw": "prores",
+        "apcn": "prores", "apch": "prores", "apcs": "prores", "apco": "prores",
+        "vvc": "vvc", "h266": "vvc", "vvenc": "vvc", "vvdec": "vvc",
+        "av2": "av2", "libaom-av2": "av2",
+        "avs3": "avs3", "avs": "avs3", "cavs3": "avs3", "hpm": "avs3",
+        "cavs": "avs3", "avs2": "avs3",
         "mpeg4": "mpeg4", "mp4v": "mpeg4",
     }
     if s in alias:
@@ -90,6 +112,10 @@ def family_of(key: str) -> str:
         "vp6": "VP6",
         "vp8": "VP8",
         "vp9": "VP9",
+        "prores": "ProRes",
+        "vvc": "VVC",
+        "av2": "AV2",
+        "avs3": "AVS3",
     }
     return m.get(k, (k.upper() if k and k != "unknown" else "UNKNOWN"))
 
@@ -104,6 +130,12 @@ def _family_module(key: str):
         return _m_vp
     if k in ("theora", "av1"):
         return _m_tav1
+    if k in ("vvc", "av2"):
+        return _m_next
+    if k == "prores":
+        return _m_prores
+    if k == "avs3":
+        return _m_avs3
     return None
 
 
@@ -154,6 +186,26 @@ _FALLBACK_BULLETS = {
         "bool 熵编码 + 分段量化 segment map",
         "AltRef 不显示，找周期大P即 AltRef",
     ],
+    "prores": [
+        "全 I 帧中间码，无 P/B、无重排，剪辑友好",
+        "10bit 422 + slice 并行，又大又稳",
+        "DCT + 类 JPEG 熵编码，GOP 恒 0",
+    ],
+    "vvc": [
+        "CTU 128 + QT/MTT 多叉树，相对 HEVC 再省约 40%",
+        "ALF/CCALF + Affine/GEO/MIP，8K 广播就绪",
+        "RPR 分辨率切换，流媒体自适应",
+    ],
+    "av2": [
+        "AV1 继任（AOM 实验中），SB 更大、工具更强",
+        "film grain 与 compound 方向延续增强",
+        "本机尚无编解码，仅描述可展示",
+    ],
+    "avs3": [
+        "LCU 128 + QT/BTT 多叉树，国标 4K/8K 广播",
+        "Affine/UMVE/HMVP + IBC，运动与屏 content 双优",
+        "DBF+SAO+ALF 三级环路，B 帧双向省码率",
+    ],
 }
 
 _WHERE = {
@@ -166,19 +218,26 @@ _WHERE = {
     "vp6": "去哪看：GOP 条看 IPP 节奏；码率峰即关键帧",
     "vp8": "去哪看：找周期大P=AltRef（金星标）；开 VP分段层看 segment",
     "vp9": "去哪看：找周期大P=AltRef（金星标）；开 VP分段层看 segment map",
+    "prores": "去哪看：GOP 条全红 I 排、GOP 恒 0、REORDER 零线、BITRATE 高而平",
+    "vvc": "去哪看：开 CTU/MTT 层看 128 网格（AVS3 LCU 同理）；大 GOP + B 密排",
+    "av2": "去哪看：AV1 SB 层的延续方向，待编码器落地",
+    "avs3": "去哪看：GOP 条看 IBB 节奏；开 AVS3 LCU 层看 128 网格深浅",
 }
 
 _ENTROPY = {
     "avc": "CABAC/CAVLC", "hevc": "CABAC", "mpeg2": "VLC",
     "theora": "Huffman(VP3)", "av1": "multi-symbol",
     "h263": "VLC", "vp6": "arithmetic", "vp8": "bool coder",
-    "vp9": "bool coder",
+    "vp9": "bool coder", "prores": "DCT+JPEG-like",
+    "vvc": "CABAC", "av2": "multi-symbol+", "avs3": "binary arithmetic",
 }
 
 _CTU = {
     "avc": "MB 16×16", "hevc": "CTU 64×64", "mpeg2": "MB 16×16",
     "theora": "MB 16×16", "av1": "SB 128×128", "h263": "GOB/MB 16×16",
     "vp6": "MB 16×16", "vp8": "MB 16×16", "vp9": "SB 64×64",
+    "prores": "slice/DCT 16×16", "vvc": "CTU 128", "av2": "SB 256?",
+    "avs3": "LCU 128",
 }
 
 
