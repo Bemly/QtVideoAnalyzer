@@ -101,7 +101,9 @@ jobs:
             $EXTRA_ARGS \
             qt_analyzer/main.py
           echo "=== dist ==="
-          ls -R dist | head -n 100
+          ls -R dist > /tmp/dist-list.txt || true
+          head -n 100 /tmp/dist-list.txt || true
+          echo "(full list: $(wc -l < /tmp/dist-list.txt) lines)"
 
       - name: Archive bundle
         shell: bash
