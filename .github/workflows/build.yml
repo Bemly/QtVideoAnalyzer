@@ -1,0 +1,166 @@
+# QtVideoAnalyzer cross-build: win-x64 / linux-x64 / mac-intel / mac-arm64
+# Runner labels exactly as requested: windows-latest / ubuntu-latest / macos-26-intel / macos-latest.
+# NOTE: if `macos-26-intel` is unavailable, swap for `macos-15-intel` (or `macos-13`).
+# Output is PyInstaller onedir+windowed (macOS yields .app); ffmpeg/ffprobe are
+# NOT bundled — install on target via FFMPEG_HOME / PATH / tools/ffmpeg/bin.
+# Tag `v*` publishes all 4 bundles to a formal GitHub Release (one-shot, no rolling).
+name: build
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: win-x64
+            os: windows-latest
+            arch: x64
+            archive: zip
+          - name: linux-x64
+            os: ubuntu-latest
+            arch: x64
+            archive: tar.gz
+          - name: mac-intel
+            os: macos-26-intel
+            arch: x64
+            archive: zip
+          - name: mac-arm64
+            os: macos-latest
+            arch: arm64
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          architecture: ${{ matrix.arch }}
+          cache: pip
+
+      - name: Install Linux system libs (Qt6 runtime)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgl1 libegl1 \
+            libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 \
+            libfontconfig1 libfreetype6 \
+            libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+            libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 \
+            libxcb-xkb1 libxcb-xinerama0 \
+            zip
+
+      - name: Install Python deps
+        shell: bash
+        run: |
+          python -m pip install -U pip
+          python -m pip install -r requirements.txt pyinstaller
+          python -m pip show PySide6 pyinstaller
+
+      - name: Selftest (headless, no ffmpeg needed)
+        shell: bash
+        run: |
+          QT_QPA_PLATFORM=offscreen python -m qt_analyzer.main --selftest
+
+      - name: PyInstaller build (onedir, windowed)
+        shell: bash
+        run: |
+          rm -rf build dist dist-archive
+          APP="QtVideoAnalyzer-${{ matrix.name }}"
+          EXTRA_ARGS=""
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            EXTRA_ARGS="--osx-bundle-identifier com.bemly.qtvideoanalyzer"
+          fi
+          python -m PyInstaller --noconfirm --clean \
+            --onedir --windowed \
+            --name "$APP" \
+            --paths . \
+            --collect-all PySide6 \
+            --collect-all shiboken6 \
+            --hidden-import cv2 \
+            --exclude-module tkinter \
+            $EXTRA_ARGS \
+            qt_analyzer/main.py
+          echo "=== dist ==="
+          ls -R dist | head -n 100
+
+      - name: Archive bundle
+        shell: bash
+        run: |
+          python - <<'PY'
+          import shutil, pathlib, os
+          name = "QtVideoAnalyzer-${{ matrix.name }}"
+          os.makedirs("dist-archive", exist_ok=True)
+          dist = pathlib.Path("dist")
+          # macOS: PyInstaller --windowed produces dist/<App>.app
+          app_bundle = dist / f"{name}.app"
+          app_dir = dist / name
+          if app_bundle.is_dir():
+              # zip the .app bundle itself
+              base = f"dist-archive/{name}"
+              shutil.make_archive(base, "zip", root_dir="dist", base_dir=f"{name}.app")
+              print(f"archived {app_bundle} -> {base}.zip")
+          elif app_dir.is_dir():
+              fmt = "gztar" if "${{ matrix.archive }}" == "tar.gz" else "zip"
+              base = f"dist-archive/{name}"
+              shutil.make_archive(base, fmt, root_dir="dist", base_dir=name)
+              print(f"archived {app_dir} -> {base} ({fmt})")
+          else:
+              raise SystemExit(f"expected build output not found under dist/: {list(dist.iterdir())}")
+          for p in sorted(pathlib.Path("dist-archive").iterdir()):
+              print(f"{p.name}  {p.stat().st_size/1024/1024:.1f} MiB")
+          PY
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: QtVideoAnalyzer-${{ matrix.name }}
+          path: dist-archive/*
+          if-no-files-found: error
+
+  release:
+    name: release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all bundles
+        uses: actions/download-artifact@v4
+        with:
+          path: bundles
+          merge-multiple: true
+
+      - name: Checksums + list
+        run: |
+          ls -lhR bundles
+          cd bundles
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: GitHub Release (versioned)
+        uses: softprops/action-gh-release@v2
+        with:
+          files: bundles/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          fail_on_unmatched_files: true
